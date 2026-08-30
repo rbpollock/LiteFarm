@@ -1,25 +1,31 @@
 import { useEffect, useLayoutEffect, useState } from 'react';
-import { areaStyles, icons, lineStyles } from './mapStyles';
-import { isArea, isLine, isPoint, locationEnum, polygonPath } from './constants';
 import { useSelector } from 'react-redux';
 import { showedSpotlightSelector } from '../showedSpotlightSlice';
-import { defaultColour } from './styles.module.scss';
+import { isArea, isLine, isPoint, locationEnum, polygonPath } from './constants';
 import { fieldEnum } from '../constants';
 import { hookFormPersistSelector } from '../hooks/useHookFormPersist/hookFormPersistSlice';
+import { area as turfArea } from '@turf/area';
+import { length as turfLength } from '@turf/length';
+import {
+  polygon as turfPolygon,
+  lineString as turfLineString,
+  point as turfPoint,
+} from '@turf/helpers';
 
 /**
- *
- * Do not modify, copy or reuse
+ * irl.coop: drawing state reworked onto raw GeoJSON (TerraDraw's native model).
+ * The drawn shape is a { type, coordinates, feature } record ([lng, lat] order);
+ * there is no google.maps overlay to hide/show/edit — the map container renders
+ * drawingToCheck + widthPolygon as GeoJSON sources. "Adjust shape" is now
+ * re-draw (TerraDraw), which is strictly better than the old un-editable drag.
  */
 export default function useDrawingManager() {
-  const [map, setMap] = useState(null);
-  const [maps, setMaps] = useState(null);
   const [drawingManager, setDrawingManager] = useState(null);
-  const [widthPolygon, setWidthPolygon] = useState(null);
+  const [widthPolygon, setWidthPolygon] = useState(null); // [lng, lat][] ring
   const [lineWidth, setLineWidth] = useState(null);
   const [drawLocationType, setDrawLocationType] = useState(null);
   const [isDrawing, setIsDrawing] = useState(false);
-  const [drawingToCheck, setDrawingToCheck] = useState(null);
+  const [drawingToCheck, setDrawingToCheck] = useState(null); // DrawnOverlay | null
 
   const [onBackPressed, setOnBackPressed] = useState(false);
   const [onSteppedBack, setOnSteppedBack] = useState(false);
@@ -36,104 +42,61 @@ export default function useDrawingManager() {
 
   useEffect(() => {
     if (onBackPressed) {
-      drawingToCheck?.overlay.setMap(null);
+      setDrawingToCheck(null);
+      setWidthPolygon(null);
       setOnBackPressed(false);
     }
-  }, [drawingToCheck, onBackPressed]);
+  }, [onBackPressed]);
 
+  // Compute the width polygon for lines that carry a buffer/width (watercourse,
+  // buffer_zone) via the turf port of the old google.maps polygonPath.
   useEffect(() => {
     if (
       drawingToCheck?.type === 'polyline' &&
       [locationEnum.watercourse, locationEnum.buffer_zone].includes(drawLocationType) &&
       !!lineWidth &&
-      drawingToCheck.overlay.getPath().getArray().length > 1
+      drawingToCheck.coordinates.length > 1
     ) {
-      const { overlay } = drawingToCheck;
-      const path = overlay.getPath().getArray();
-      const polyPath = polygonPath(path, Number(lineWidth), maps);
-      widthPolygon !== null && widthPolygon.setMap(null);
-      const linePolygon = new maps.Polygon({
-        paths: polyPath,
-        ...lineStyles[drawLocationType].polyStyles,
-      });
-      linePolygon.setMap(map);
-      setWidthPolygon(linePolygon);
+      setWidthPolygon(polygonPath(drawingToCheck.coordinates, Number(lineWidth)));
     } else if (widthPolygon !== null) {
-      widthPolygon.setMap(null);
       setWidthPolygon(null);
     }
   }, [drawingToCheck, lineWidth]);
 
+  // Reconstruct a previously-drawn shape when stepping back from the form.
   useEffect(() => {
     if (!onSteppedBack) return;
-    let polygonDragListener, markerDragListener, polygonNewPointDragListener;
-    let bounds;
     const { type } = overlayData;
     setDrawLocationType(type);
     setIsDrawing(false);
     if (isArea(type)) {
-      const redrawnPolygon = new maps.Polygon({
-        paths: overlayData.grid_points,
-        ...getDrawingOptions(type).polygonOptions,
-      });
-      redrawnPolygon.setMap(map);
-      polygonDragListener = maps.event.addListener(redrawnPolygon.getPath(), 'set_at', () => {
-        setPointChanged(true);
-      });
-      polygonNewPointDragListener = maps.event.addListener(
-        redrawnPolygon.getPath(),
-        'insert_at',
-        () => {
-          setPointChanged(true);
-        },
-      );
+      const coords = overlayData.grid_points.map(({ lat, lng }) => [lng, lat]);
       setDrawingToCheck({
         type: 'polygon',
-        overlay: redrawnPolygon,
+        coordinates: coords,
+        feature: turfPolygon([[...coords, coords[0]]]),
       });
-      bounds = getBounds(maps, overlayData.grid_points);
     } else if (isLine(type)) {
       setLineWidth(overlayData.width);
-      const redrawnLine = new maps.Polyline({
-        path: overlayData.line_points,
-        ...getDrawingOptions(type).polylineOptions,
-      });
-      const overlay = {
-        type: 'polyline',
-        overlay: redrawnLine,
-      };
-      redrawnLine.setMap(map);
-      addLineListeners(overlay, maps);
-      bounds = getBounds(maps, overlayData.line_points);
-      setDrawingToCheck(overlay);
-    } else if (isPoint(type)) {
-      let redrawnMarker = new maps.Marker({
-        position: overlayData.point,
-        icon: icons[type],
-        draggable: true,
-      });
-      redrawnMarker.setMap(map);
-      markerDragListener = maps.event.addListener(redrawnMarker, 'dragend', () => {
-        setPointChanged(true);
-      });
+      const coords = overlayData.line_points.map(({ lat, lng }) => [lng, lat]);
       setDrawingToCheck({
-        type: 'marker',
-        overlay: redrawnMarker,
+        type: 'polyline',
+        coordinates: coords,
+        feature: turfLineString(coords),
       });
-      bounds = getBounds(maps, [overlayData.point]);
+    } else if (isPoint(type)) {
+      const [lng, lat] = [overlayData.point.lng, overlayData.point.lat];
+      setDrawingToCheck({
+        type: 'point',
+        coordinates: [[lng, lat]],
+        feature: turfPoint([lng, lat]),
+      });
     }
-    if (bounds) {
-      map.fitBounds(bounds);
-    }
-
     return () => {
       if (!onSteppedBack) return;
-      if (polygonDragListener) maps.event.removeListener(polygonDragListener);
-      if (polygonNewPointDragListener) maps.event.removeListener(polygonNewPointDragListener);
-      if (markerDragListener) maps.event.removeListener(markerDragListener);
       setOnSteppedBack(false);
     };
-  }, [onSteppedBack, map, maps, overlayData]);
+  }, [onSteppedBack, overlayData]);
 
   useLayoutEffect(() => {
     if (drawingToCheck) {
@@ -147,9 +110,7 @@ export default function useDrawingManager() {
     }
   }, [drawingToCheck, showZeroAreaWarning, showZeroLengthWarning]);
 
-  const initDrawingState = (map, maps, drawingManagerInit) => {
-    setMap(map);
-    setMaps(maps);
+  const initDrawingState = (drawingManagerInit) => {
     setDrawingManager(drawingManagerInit);
   };
 
@@ -159,30 +120,16 @@ export default function useDrawingManager() {
     drawingManager.setMode(type);
   };
 
-  const finishDrawing = (drawing, innerMap) => {
+  const finishDrawing = (drawing) => {
     setIsDrawing(false);
     setDrawingToCheck(drawing);
-    if (drawing.type === 'polyline') {
-      addLineListeners(drawing, innerMap);
-    }
-  };
-  const addLineListeners = (drawing, innerMap) => {
-    const { overlay } = drawing;
-    innerMap.event.addListener(overlay.getPath(), 'set_at', (redrawnLine) => {
-      setPointChanged(true);
-      setDrawingToCheck({ ...drawing });
-    });
-    innerMap.event.addListener(overlay.getPath(), 'insert_at', (redrawnLine) => {
-      setPointChanged(true);
-      setDrawingToCheck({ ...drawing });
-    });
   };
 
   const resetDrawing = (wasBackPressed = false) => {
     if (wasBackPressed) setOnSteppedBack(false);
     setOnBackPressed(wasBackPressed);
-    drawingToCheck?.overlay.setMap(null);
     setDrawingToCheck(null);
+    setWidthPolygon(null);
   };
 
   const closeDrawer = () => {
@@ -191,49 +138,27 @@ export default function useDrawingManager() {
     drawingManager.setMode(null);
   };
 
-  const getVertices = (vertex) => ({
-    lat: vertex.lat(),
-    lng: vertex.lng(),
-  });
-
-  const toggleDrawingAdjustment = () => {
-    drawingToCheck.overlay.setOptions({
-      editable: !drawingToCheck.overlay.getEditable(),
-      draggable: !drawingToCheck.overlay.getDraggable(),
-    });
-  };
-
   const getOverlayInfo = () => {
-    const { overlay } = drawingToCheck;
-    const { computeArea, computeLength, computeDistanceBetween } = maps.geometry.spherical;
     if (isArea(drawLocationType)) {
-      const path = overlay.getPath().getArray();
-      const perimeter = Math.round(
-        computeLength(path) + computeDistanceBetween(path[0], path[path.length - 1]),
-      );
-      const area = Math.round(computeArea(path));
-      const grid_points = path.map(getVertices);
-      const result = { type: drawLocationType, grid_points };
-      result[fieldEnum.total_area] = area;
-      result[fieldEnum.perimeter] = perimeter;
-      return result;
+      const ring = [...drawingToCheck.coordinates, drawingToCheck.coordinates[0]];
+      const geom = turfPolygon([ring]);
+      const grid_points = drawingToCheck.coordinates.map(([lng, lat]) => ({ lat, lng }));
+      const totalArea = Math.round(turfArea(geom));
+      const perimeter = Math.round(turfLength(turfLineString(ring)));
+      return { type: drawLocationType, grid_points, total_area: totalArea, perimeter };
     }
     if (isLine(drawLocationType)) {
-      const path = overlay.getPath();
-      const line_points = path.getArray().map(getVertices);
-      const length = Math.round(computeLength(path));
-      let area;
+      const line_points = drawingToCheck.coordinates.map(([lng, lat]) => ({ lat, lng }));
+      const lineLength = Math.round(turfLength(turfLineString(drawingToCheck.coordinates)));
+      let total_area = null;
       if (widthPolygon) {
-        area = Math.round(computeArea(widthPolygon.getPath()));
-      } else {
-        area = null;
+        total_area = Math.round(turfArea(turfPolygon([[...widthPolygon, widthPolygon[0]]])));
       }
-      return { type: drawLocationType, line_points, length, total_area: area };
+      return { type: drawLocationType, line_points, length: lineLength, total_area };
     }
     if (isPoint(drawLocationType)) {
-      const position = overlay.getPosition();
-      const point = { lat: position.lat(), lng: position.lng() };
-      return { type: drawLocationType, point };
+      const [lng, lat] = drawingToCheck.coordinates[0];
+      return { type: drawLocationType, point: { lat, lng } };
     }
   };
 
@@ -241,18 +166,17 @@ export default function useDrawingManager() {
     setOnSteppedBack(true);
   };
 
-  // todo undo drawing
-
   const drawingState = {
     type: drawLocationType,
     isActive: isDrawing,
     drawingManager,
     drawingToCheck,
+    widthPolygon,
     showAdjustAreaSpotlightModal,
     showAdjustLineSpotlightModal,
     showZeroLengthWarning,
     showZeroAreaWarning,
-    pointChanged: pointChanged,
+    pointChanged,
   };
 
   const drawingFunctions = {
@@ -263,7 +187,6 @@ export default function useDrawingManager() {
     closeDrawer,
     getOverlayInfo,
     reconstructOverlay,
-    toggleDrawingAdjustment,
     setLineWidth,
     setShowAdjustAreaSpotlightModal,
     setShowAdjustLineSpotlightModal,
@@ -273,67 +196,3 @@ export default function useDrawingManager() {
 
   return [drawingState, drawingFunctions];
 }
-
-export const getDrawingOptions = (type) => {
-  if (isArea(type)) {
-    const { colour } = areaStyles[type];
-    return {
-      polygonOptions: {
-        strokeWeight: 2,
-        fillOpacity: 0.3,
-        editable: true,
-        fillColor: colour,
-        strokeColor: colour,
-        geodesic: true,
-        suppressUndo: true,
-      },
-    };
-  }
-
-  if (isLine(type)) {
-    const { colour, dashScale, dashLength } = lineStyles[type];
-    return {
-      polylineOptions: {
-        strokeWeight: 2,
-        editable: true,
-        fillColor: colour,
-        strokeColor: defaultColour,
-        geodesic: true,
-        suppressUndo: true,
-        icons: [
-          {
-            icon: {
-              path: 'M 0,0 0,1',
-              strokeColor: colour,
-              strokeOpacity: 1,
-              strokeWeight: 2,
-              scale: dashScale,
-            },
-            offset: '0',
-            repeat: dashLength,
-          },
-        ],
-      },
-    };
-  }
-
-  if (isPoint(type))
-    return {
-      markerOptions: {
-        icon: icons[type],
-        draggable: true,
-        crossOnDrag: false,
-      },
-    };
-
-  console.log('invalid location type');
-  return null;
-};
-
-const getBounds = function (maps, path) {
-  let bounds = new maps.LatLngBounds();
-  path.forEach(function (item, index) {
-    bounds.extend(new maps.LatLng(item.lat, item.lng));
-  });
-  return bounds;
-};

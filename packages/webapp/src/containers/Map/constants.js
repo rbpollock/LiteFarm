@@ -1,5 +1,7 @@
 import { ExternalMapLocationType } from '../../hooks/location/types';
 import { FigureType, InternalMapLocationType } from '../../store/api/types';
+import { bearing as turfBearing } from '@turf/bearing';
+import { destination as turfDestination } from '@turf/destination';
 
 export const DEFAULT_CENTER = {
   lat: 49.24966,
@@ -91,45 +93,42 @@ export const locationEnum = {
   pivot_sector: 'pivot_sector',
 };
 
-export const polygonPath = (path, width, maps) => {
+// irl.coop: build a closed polygon around a polyline of a given width (in
+// metres) using turf's spherical bearing/destination (the google.maps
+// computeHeading/computeOffset equivalent). Path is [lng, lat][] pairs.
+export const polygonPath = (path, width) => {
   const { leftPoints, rightPoints } = path.reduce(linePathPolygonConstructor, {
     leftPoints: [],
     rightPoints: [],
     bearings: [],
     width,
-    maps,
   });
   return leftPoints.concat(rightPoints.reverse());
 };
 
 const linePathPolygonConstructor = (innerState, point, i, path) => {
-  const { bearings, leftPoints, rightPoints, width, maps } = innerState;
-  const {
-    geometry: {
-      spherical: { computeHeading, computeOffset },
-    },
-  } = maps;
+  const { bearings, leftPoints, rightPoints, width } = innerState;
   if (i === 0 || i === path.length - 1) {
     const initialPoint = i === 0 ? point : path[i - 1];
     const nextPoint = i === 0 ? path[i + 1] : point;
     setPerpendiculars(initialPoint, nextPoint);
   } else {
-    const heading = computeHeading(point, path[i + 1]);
+    const heading = turfBearing(point, path[i + 1]);
     bearings.push(heading);
     // OC: 180 is added to get the angle from the perspective of the 2nd point.
     const angleFormed = heading - adjustAngle(bearings[i - 1] + 180);
     const angleFormedInRadians = (Math.abs(angleFormed) * Math.PI) / 180;
     if (Math.sin(angleFormedInRadians / 2) < 0.03) {
       setPerpendiculars(path[i - 1], point);
-      return { bearings, leftPoints, rightPoints, width, maps };
+      return { bearings, leftPoints, rightPoints, width };
     }
     const distance = width / (2 * Math.sin(angleFormedInRadians / 2));
     const heading1 = adjustAngle(heading - angleFormed / 2);
     const heading2 = adjustAngle(heading1 + 180);
-    const p1 = computeOffset(point, distance, heading1);
-    const p2 = computeOffset(point, distance, heading2);
-    const p1LeftHeading = computeHeading(leftPoints[leftPoints.length - 1], p1);
-    const p2LeftHeading = computeHeading(leftPoints[leftPoints.length - 1], p2);
+    const p1 = turfDestination(point, distance, heading1, { units: 'meters' }).geometry.coordinates;
+    const p2 = turfDestination(point, distance, heading2, { units: 'meters' }).geometry.coordinates;
+    const p1LeftHeading = turfBearing(leftPoints[leftPoints.length - 1], p1);
+    const p2LeftHeading = turfBearing(leftPoints[leftPoints.length - 1], p2);
     // OC: This line of code says: Is the slope of line p1 (m1) closest to the main line than the slope of line p2 (m2)?
     // Or Δmp1 < Δmp2
     const isP1Left =
@@ -140,22 +139,23 @@ const linePathPolygonConstructor = (innerState, point, i, path) => {
   }
 
   function setPerpendiculars(initialPoint, nextPoint) {
-    const heading = computeHeading(initialPoint, nextPoint);
+    const heading = turfBearing(initialPoint, nextPoint);
     const { left, right } = calculatePerpendiculars(heading);
     bearings.push(heading);
-    leftPoints.push(computeOffset(point, width / 2, left));
-    rightPoints.push(computeOffset(point, width / 2, right));
+    leftPoints.push(
+      turfDestination(initialPoint, width / 2, left, { units: 'meters' }).geometry.coordinates,
+    );
+    rightPoints.push(
+      turfDestination(initialPoint, width / 2, right, { units: 'meters' }).geometry.coordinates,
+    );
   }
 
-  return { bearings, leftPoints, rightPoints, width, maps };
+  return { bearings, leftPoints, rightPoints, width };
 };
 
-function areTheSamePoint(p1, p2) {
-  return p1.lat() === p2.lat() && p1.lng() === p2.lng();
-}
-const calculatePerpendiculars = (bearing) => {
-  const left = adjustAngle(bearing - 90);
-  const right = adjustAngle(bearing + 90);
+const calculatePerpendiculars = (heading) => {
+  const left = adjustAngle(heading - 90);
+  const right = adjustAngle(heading + 90);
 
   return { left, right };
 };
