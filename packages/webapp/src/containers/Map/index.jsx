@@ -218,7 +218,6 @@ export default function Map({ isCompactSideMenu }) {
     }
     setShowingConfirmButtons(true);
     finishDrawing(drawing);
-    drawingState.drawingManager?.setMode(null);
     dispatch(setMapAddDrawerHide(farm_id));
   };
 
@@ -379,28 +378,30 @@ export default function Map({ isCompactSideMenu }) {
 
   return (
     <>
-      {mapReady && (
-        <>
-          {!drawingState.type && !showSuccessHeader && <PureMapHeader farmName={farm_name} />}
-          {showSuccessHeader && (
-            <PureSnackbarWithoutBorder
-              className={styles.successSnackbar}
-              onDismiss={handleCloseSuccessHeader}
-              title={successMessage}
-            />
-          )}
-          <div data-cy="map-selection" className={styles.pageWrapper}>
+      {mapReady && !drawingState.type && !showSuccessHeader && <PureMapHeader farmName={farm_name} />}
+      {mapReady && showSuccessHeader && (
+        <PureSnackbarWithoutBorder
+          className={styles.successSnackbar}
+          onDismiss={handleCloseSuccessHeader}
+          title={successMessage}
+        />
+      )}
+      <div data-cy="map-selection" className={styles.pageWrapper}>
             <div className={styles.mapContainer}>
               <div data-cy="map-mapContainer" ref={mapWrapperRef} className={styles.mapContainer}>
                 <div ref={mapContainerRef} style={{ width: '100%', height: '100%', flexGrow: 1 }} />
-                <CustomZoom
-                  style={{ position: 'absolute', right: 12, bottom: 40 }}
-                  onClickZoomIn={() => mapRef.current?.zoomIn()}
-                  onClickZoomOut={() => mapRef.current?.zoomOut()}
-                />
-                <CustomCompass style={{ position: 'absolute', right: 12, bottom: 12 }} />
+                {mapReady && (
+                  <>
+                    <CustomZoom
+                      style={{ position: 'absolute', right: 12, bottom: 40 }}
+                      onClickZoomIn={() => mapRef.current?.zoomIn()}
+                      onClickZoomOut={() => mapRef.current?.zoomOut()}
+                    />
+                    <CustomCompass style={{ position: 'absolute', right: 12, bottom: 12 }} />
+                  </>
+                )}
               </div>
-              {drawingState.type && (
+              {mapReady && drawingState.type && (
                 <div
                   className={clsx(
                     styles.drawingBar,
@@ -442,9 +443,9 @@ export default function Map({ isCompactSideMenu }) {
                 </div>
               )}
             </div>
-            <LocationSelectionModal history={history} />
+            {mapReady && <LocationSelectionModal history={history} />}
 
-            {!drawingState.type && (
+            {mapReady && !drawingState.type && (
               <PureMapFooter
                 isAdmin={is_admin}
                 showSpotlight={!showedSpotlight.map}
@@ -509,9 +510,7 @@ export default function Map({ isCompactSideMenu }) {
                 }}
               />
             )}
-          </div>
-        </>
-      )}
+      </div>
       <LoadingBackdrop
         isOpen={!mapReady || (!isFetchingInternalLocations && isLoadingExternalLocations)}
         showDelay={400}

@@ -74,6 +74,7 @@ export const createShapeCapture = (
     }
     const result = terraFeatureToOverlay(feature, currentLocationType);
     draw.clear();
+    draw.setMode('static');
     if (result) {
       onFinish(result);
     }
