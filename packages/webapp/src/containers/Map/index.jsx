@@ -223,10 +223,12 @@ export default function Map({ isCompactSideMenu }) {
 
   // Init the MapLibre map + TerraDraw drawing once.
   useEffect(() => {
+    const node = mapContainerRef.current;
+    if (!node) return; // container not mounted yet — should not happen (div is unconditional)
     const protocol = new pmtiles.Protocol();
     maplibregl.addProtocol('pmtiles', protocol.tile);
     const map = new maplibregl.Map({
-      container: mapContainerRef.current,
+      container: node,
       style: STYLE,
       center: grid_points?.lng != null ? [grid_points.lng, grid_points.lat] : [DEFAULT_CENTER.lng, DEFAULT_CENTER.lat],
       zoom: DEFAULT_ZOOM,

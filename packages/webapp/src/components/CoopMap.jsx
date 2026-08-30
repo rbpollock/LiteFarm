@@ -45,11 +45,13 @@ export default function CoopMap({ center, onPick, height = 320 }) {
   onPickRef.current = onPick;
 
   useEffect(() => {
+    const node = containerRef.current;
+    if (!node) return; // container not mounted yet — should not happen (div is unconditional)
     const protocol = new pmtiles.Protocol();
     maplibregl.addProtocol('pmtiles', protocol.tile);
     const hasCenter = center?.lng != null && center?.lat != null;
     const map = new maplibregl.Map({
-      container: containerRef.current,
+      container: node,
       style: STYLE,
       center: hasCenter ? [center.lng, center.lat] : [-98.5, 39.8],
       zoom: hasCenter ? 16 : 3,
