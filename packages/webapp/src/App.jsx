@@ -26,7 +26,6 @@ import { ANIMALS_URL, MAP_URL, SENSORS_URL } from './util/siteMapConstants';
 import { AppUIContext } from './contexts/appContext';
 import { useOfflineDetector } from './containers/hooks/useOfflineDetector/useOfflineDetector';
 import { useServiceWorkerListener } from './hooks/useServiceWorkerListener/useServiceWorkerListener';
-import { useGoogleMapsLoader } from './hooks/useGoogleMapsLoader';
 import useOfflineActivityLogger from './hooks/useOfflineActivityLogger';
 
 function App() {
@@ -39,7 +38,6 @@ function App() {
   useOfflineDetector();
   useServiceWorkerListener();
   useOfflineActivityLogger();
-  const { isLoaded } = useGoogleMapsLoader();
 
   return (
     <div className={clsx(styles.container)}>
@@ -47,7 +45,10 @@ function App() {
         value={{
           activeDrawer,
           setActiveDrawer,
-          maps: { isLoaded },
+          // irl.coop: Google Maps is gone — MapLibre loads via npm, so the
+          // coop map is always ready. (Field-level Google maps are the
+          // remaining full-swap work; see docs/design/litefarm-integration.md.)
+          maps: { isLoaded: true },
         }}
       >
         <Navigation
