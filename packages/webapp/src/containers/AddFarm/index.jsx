@@ -10,6 +10,7 @@ import {
   userFarmSelector,
 } from '../userFarmSlice';
 import { forwardGeocode, reverseGeocode } from '../../util/geocode';
+import LoadingAnimation from '../../assets/images/signUp/animated_loading_farm.svg?react';
 import PureAddFarm from '../../components/AddFarm';
 import { patchFarm, postFarm } from './saga';
 import { useTranslation } from 'react-i18next';
@@ -44,6 +45,7 @@ const AddFarm = () => {
   const gridPoints = watch(GRID_POINTS);
   const disabled = !isValid;
   const [isGettingLocation, setIsGettingLocation] = useState(false);
+  const [isGeocoding, setIsGeocoding] = useState(false);
   const farmNameRegister = register(FARMNAME, {
     required: { value: true, message: t('ADD_FARM.FARM_IS_REQUIRED') },
   });
@@ -96,13 +98,22 @@ const AddFarm = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // irl.coop: reverse geocode (lat/lng -> country) via Nominatim (OSM).
-  const setCountryFromLatLng = async (latlng, callback) => {
+  // irl.coop: reverse geocode (lat/lng -> country + address) via Nominatim (OSM).
+  // With setAddress (map click), also populate the address/lat-long box.
+  const setCountryFromLatLng = async (latlng, callback, { setAddress = false } = {}) => {
     const { lat, lng } = latlng;
+    setIsGeocoding(true);
     setValue(GRID_POINTS, { lat, lng }, { shouldValidate: true });
-    const result = await reverseGeocode(lat, lng);
-    setValue(COUNTRY, result?.country, { shouldValidate: true });
-    callback?.();
+    try {
+      const result = await reverseGeocode(lat, lng);
+      setValue(COUNTRY, result?.country, { shouldValidate: true });
+      if (setAddress) {
+        setValue(ADDRESS, result?.formatted || `${lat}, ${lng}`, { shouldValidate: true });
+      }
+    } finally {
+      setIsGeocoding(false);
+      callback?.();
+    }
   };
 
   const parseLatLng = (latLngString) => {
@@ -138,11 +149,16 @@ const AddFarm = () => {
   const handleAddressBlur = async () => {
     const value = getValues(ADDRESS);
     if (value && !parseLatLng(value)) {
-      const result = await forwardGeocode(value);
-      if (result) {
-        setValue(GRID_POINTS, { lat: result.lat, lng: result.lng }, { shouldValidate: true });
-        setValue(COUNTRY, result.country, { shouldValidate: true });
-        setValue(ADDRESS, result.formatted, { shouldValidate: true });
+      setIsGeocoding(true);
+      try {
+        const result = await forwardGeocode(value);
+        if (result) {
+          setValue(GRID_POINTS, { lat: result.lat, lng: result.lng }, { shouldValidate: true });
+          setValue(COUNTRY, result.country, { shouldValidate: true });
+          setValue(ADDRESS, result.formatted, { shouldValidate: true });
+        }
+      } finally {
+        setIsGeocoding(false);
       }
     }
     setTimeout(() => {
@@ -195,8 +211,8 @@ const AddFarm = () => {
             label: t('ADD_FARM.FARM_LOCATION'),
             placeholder: t('ADD_FARM.ENTER_LOCATION_PLACEHOLDER'),
             info: t('ADD_FARM.FARM_LOCATION_INPUT_INFO'),
-            icon: isGettingLocation ? (
-              <span>{t('ADD_FARM.LOCATING')}</span>
+            icon: isGettingLocation || isGeocoding ? (
+              <LoadingAnimation />
             ) : (
               <VscLocation data-cy="addFarm-mapPin" size={27} onClick={getGeoLocation} />
             ),
@@ -211,7 +227,7 @@ const AddFarm = () => {
         map={
           <CoopMap
             center={gridPoints}
-            onPick={(latlng) => setCountryFromLatLng(latlng)}
+            onPick={(latlng) => setCountryFromLatLng(latlng, undefined, { setAddress: true })}
           />
         }
       />
