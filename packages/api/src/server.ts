@@ -116,6 +116,7 @@ import logger from './common/logger.js';
 
 // import routes
 import loginRoutes from './routes/loginRoute.js';
+import gateSsoRoute from './routes/gateSsoRoute.js';
 
 import defaultAnimalTypeRoute from './routes/defaultAnimalTypeRoute.js';
 import customAnimalTypeRoute from './routes/customAnimalTypeRoute.js';
@@ -298,6 +299,7 @@ app
   .use(router)
   .set('json spaces', 2)
   .use('/login', loginRoutes)
+  .use('/gate_sso', gateSsoRoute)
   .use('/password_reset', passwordResetRoutes)
   .use('/dfc', dataFoodConsortiumRoute)
   // Serve the .well-known/dfc file

@@ -22,6 +22,7 @@ const checkJwt = expressjwt({
   path: [
     '/user',
     '/login',
+    '/gate_sso',
     '/password_reset',
     '/user/accept_invitation',
     '/user_farm/accept_invitation',
