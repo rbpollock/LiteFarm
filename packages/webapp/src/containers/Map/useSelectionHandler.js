@@ -3,10 +3,16 @@ import { useEffect, useState } from 'react';
 import { useHistory } from 'react-router-dom';
 import { canShowSelection, canShowSelectionSelector, locations } from '../mapSlice';
 import { useDispatch, useSelector } from 'react-redux';
+import { booleanPointInPolygon } from '@turf/boolean-point-in-polygon';
+import { pointToLineDistance } from '@turf/point-to-line-distance';
+import { distance as turfDistance } from '@turf/distance';
+import { point as turfPoint } from '@turf/helpers';
 
 /**
- *
- * Do not modify, copy or reuse
+ * irl.coop: hit-testing reworked onto GeoJSON + turf. `handleSelection` takes a
+ * [lng, lat] click coordinate and the asset feature records ({ feature, visible,
+ * location_id, location_name, type, asset, isAddonSensor }), replacing the old
+ * google.maps containsLocation/isLocationOnEdge/marker-position checks.
  */
 const useSelectionHandler = () => {
   const history = useHistory();
@@ -96,22 +102,16 @@ const useSelectionHandler = () => {
     }
   }, [overlappedLocations, dismissSelection]);
 
-  const handleSelection = (
-    latLng,
-    locationAssets,
-    maps,
-    isLocationAsset,
-    isLocationCluster,
-    isSensor,
-  ) => {
-    let overlappedLocationsCopy = structuredClone(initOverlappedLocations);
+  const handleSelection = (coordinates, locationAssets, isLocationAsset) => {
+    const overlappedLocationsCopy = structuredClone(initOverlappedLocations);
     if (isLocationAsset) {
       Object.keys(locationAssets).map((locationType) => {
-        if (isArea(locationType) || isAreaLine(locationType)) {
+        if (isArea(locationType)) {
           locationAssets[locationType].forEach((area) => {
             if (
-              area?.polygon?.visible &&
-              maps.geometry.poly.containsLocation(latLng, area.polygon)
+              area.visible &&
+              area.feature &&
+              booleanPointInPolygon(turfPoint(coordinates), area.feature)
             ) {
               overlappedLocationsCopy.area.push({
                 id: area.location_id,
@@ -121,11 +121,13 @@ const useSelectionHandler = () => {
               });
             }
           });
-        } else if (isLine(locationType)) {
+        } else if (isAreaLine(locationType) || isLine(locationType)) {
           locationAssets[locationType].forEach((line) => {
             if (
-              line.polyline.visible &&
-              maps.geometry.poly.isLocationOnEdge(latLng, line.polyline, 10e-4)
+              line.visible &&
+              line.feature &&
+              pointToLineDistance(turfPoint(coordinates), line.feature, { units: 'meters' }) <
+                (isAreaLine(locationType) ? 30 : 11)
             ) {
               overlappedLocationsCopy.line.push({
                 id: line.location_id,
@@ -136,50 +138,23 @@ const useSelectionHandler = () => {
             }
           });
         } else if (isPoint(locationType)) {
-          if (isLocationCluster) {
-            locationAssets[locationType]
-              .sort((a, b) => {
-                if (a.location_name < b.location_name) {
-                  return -1;
-                } else if (b.location_name > a.location_name) {
-                  return 1;
-                } else {
-                  return 0;
-                }
-              })
-              .forEach((point) => {
-                overlappedLocationsCopy.point.push({
-                  id: point.location_id,
-                  name: point.location_name,
-                  asset: point.asset,
-                  type: point.type,
-                  isAddonSensor: point.isAddonSensor,
-                });
-              });
-          } else if (isSensor) {
-            locationAssets[locationType].forEach((point) => {
+          locationAssets[locationType].forEach((point) => {
+            if (
+              point.visible &&
+              point.feature &&
+              turfDistance(turfPoint(coordinates), turfPoint(point.feature.geometry.coordinates), {
+                units: 'meters',
+              }) < 20
+            ) {
               overlappedLocationsCopy.point.push({
                 id: point.location_id,
                 name: point.location_name,
                 asset: point.asset,
                 type: point.type,
                 isAddonSensor: point.isAddonSensor,
-                preview: true,
               });
-            });
-          } else {
-            locationAssets[locationType].forEach((point) => {
-              if (point.marker.visible && latLng === point.marker.position) {
-                overlappedLocationsCopy.point.push({
-                  id: point.location_id,
-                  name: point.location_name,
-                  asset: point.asset,
-                  type: point.type,
-                  isAddonSensor: point.isAddonSensor,
-                });
-              }
-            });
-          }
+            }
+          });
         }
       });
       setOverlappedLocations(structuredClone(overlappedLocationsCopy));

@@ -37,7 +37,7 @@ export const createShapeCapture = (
   map: maplibregl.Map,
   onFinish: (result: DrawnOverlay) => void,
 ): ShapeCapture => {
-  const adapter = new TerraDrawMapLibreGLAdapter({ map, maplibregl, coordinatePrecision: 9 });
+  const adapter = new TerraDrawMapLibreGLAdapter({ map, coordinatePrecision: 9 });
 
   const draw = new TerraDraw({
     adapter,

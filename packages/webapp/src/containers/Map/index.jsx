@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
+import maplibregl from 'maplibre-gl';
+import 'maplibre-gl/dist/maplibre-gl.css';
+import * as pmtiles from 'pmtiles';
 import { useHistory } from 'react-router-dom';
-import { createRoot } from 'react-dom/client';
 import { useTranslation } from 'react-i18next';
 import styles from './styles.module.scss';
-import GoogleMap from 'google-map-react';
 import { saveAs } from 'file-saver';
-import { DEFAULT_ZOOM, isArea, isLine, locationEnum } from './constants';
+import { DEFAULT_CENTER, DEFAULT_ZOOM, isArea, isLine, locationEnum } from './constants';
 import { useDispatch, useSelector } from 'react-redux';
-import { useAppUIContext } from '../../contexts/appContext';
 import { measurementSelector, userFarmSelector } from '../userFarmSlice';
 import html2canvas from 'html2canvas';
 import { sendMapToEmail, setSpotlightToShown } from './saga';
@@ -32,7 +32,6 @@ import CustomCompass from '../../components/Map/CustomCompass';
 import DrawingManager from '../../components/Map/DrawingManager';
 import useDrawingManager from './useDrawingManager';
 import { createShapeCapture } from './createShapeCapture';
-
 import useMapAssetRenderer from './useMapAssetRenderer';
 import {
   mapFilterSettingSelector,
@@ -59,19 +58,53 @@ import {
 } from './mapAddDrawerSlice';
 import clsx from 'clsx';
 import { ADD_SENSORS_URL } from '../../util/siteMapConstants';
-import {
-  cleanupGeometryListeners,
-  cleanupInstanceListeners,
-} from '../../util/google-maps/cleanupListeners';
 import useAvailableFilterSettings from './useAvailableFilterSettings';
 import { useIsOffline } from '../hooks/useOfflineDetector/useIsOffline';
+import { area as turfArea } from '@turf/area';
+import { length as turfLength } from '@turf/length';
+import { polygon as turfPolygon, lineString as turfLineString } from '@turf/helpers';
+
+const TILES = 'https://s3api.irl.coop/maps/coverage.pmtiles';
+const STYLE = {
+  version: 8,
+  glyphs: 'https://maps.irl.coop/glyphs/{fontstack}/{range}.pbf',
+  sources: {
+    basemap: { type: 'vector', url: `pmtiles://${TILES}`, maxzoom: 14 },
+  },
+  layers: [
+    { id: 'background', type: 'background', paint: { 'background-color': '#f5f0e6' } },
+    { id: 'water', type: 'fill', source: 'basemap', 'source-layer': 'water', paint: { 'fill-color': '#a9c8dc' } },
+    {
+      id: 'landcover',
+      type: 'fill',
+      source: 'basemap',
+      'source-layer': 'landcover',
+      filter: ['in', 'class', 'wood', 'grass', 'grassland'],
+      paint: { 'fill-color': '#d7e0c4', 'fill-opacity': 0.7 },
+    },
+    {
+      id: 'roads',
+      type: 'line',
+      source: 'basemap',
+      'source-layer': 'transportation',
+      filter: ['in', 'class', 'motorway', 'trunk', 'primary', 'secondary'],
+      paint: { 'line-color': '#ffffff', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.8, 14, 5] },
+    },
+    {
+      id: 'buildings',
+      type: 'fill',
+      source: 'basemap',
+      'source-layer': 'building',
+      paint: { 'fill-color': '#d9d0c0', 'fill-opacity': 0.6 },
+    },
+  ],
+};
+
+const DRAWING_SOURCE = 'drawing-source';
 
 export default function Map({ isCompactSideMenu }) {
   const history = useHistory();
   const { farm_name, grid_points, is_admin, farm_id } = useSelector(userFarmSelector);
-  const {
-    maps: { isLoaded },
-  } = useAppUIContext();
   const filterSettings = useSelector(mapFilterSettingSelector);
   const mapAddDrawer = useSelector(mapAddDrawerSelector);
   const isMapFilterSettingActive = useSelector(isMapFilterSettingActiveSelector);
@@ -80,9 +113,6 @@ export default function Map({ isCompactSideMenu }) {
   const dispatch = useDispatch();
   const system = useSelector(measurementSelector);
   const overlayData = useSelector(hookFormPersistSelector);
-  const [gMap, setGMap] = useState(null);
-  const [gMaps, setGMaps] = useState(null);
-
   const isRedrawing = useSelector(hookFormPersistIsRedrawingSelector);
 
   const lineTypesWithWidth = [locationEnum.buffer_zone, locationEnum.watercourse];
@@ -98,13 +128,8 @@ export default function Map({ isCompactSideMenu }) {
   const isOffline = useIsOffline();
 
   const initialLineData = {
-    [locationEnum.watercourse]: {
-      width: 1,
-      buffer_width: 15,
-    },
-    [locationEnum.buffer_zone]: {
-      width: 8,
-    },
+    [locationEnum.watercourse]: { width: 1, buffer_width: 15 },
+    [locationEnum.buffer_zone]: { width: 8 },
   };
   const persistedPathsSet = useSelector(hookFormPersistedPathsSetSelector);
   useEffect(() => {
@@ -157,183 +182,93 @@ export default function Map({ isCompactSideMenu }) {
   const [showDrawAreaSpotlightModal, setShowDrawAreaSpotlightModal] = useState(false);
   const [showDrawLineSpotlightModal, setShowDrawLineSpotlightModal] = useState(false);
 
-  const getMapOptions = (maps) => {
-    return {
-      styles: [
-        {
-          featureType: 'poi.business',
-          elementType: 'labels',
-          stylers: [
-            {
-              visibility: 'off',
-            },
-          ],
-        },
-      ],
-      gestureHandling: 'greedy',
-      disableDoubleClickZoom: false,
-      minZoom: 1,
-      tilt: 0,
-      mapTypeId: !roadview ? maps.MapTypeId.SATELLITE : maps.MapTypeId.ROADMAP,
-      mapTypeControlOptions: {
-        style: maps.MapTypeControlStyle.HORIZONTAL_BAR,
-        position: maps.ControlPosition.BOTTOM_CENTER,
-        mapTypeIds: [maps.MapTypeId.ROADMAP, maps.MapTypeId.SATELLITE],
-      },
-      clickableIcons: false,
-      streetViewControl: false,
-      scaleControl: false,
-      mapTypeControl: false,
-      panControl: false,
-      zoomControl: false,
-      rotateControl: false,
-      fullscreenControl: false,
-    };
-  };
-  const {
-    drawAssets,
-    assetGeometriesRef,
-    markerClusterRef,
-    isFetchingInternalLocations,
-    isLoadingExternalLocations,
-  } = useMapAssetRenderer({
-    isClickable: !drawingState.type,
-    drawingState: drawingState,
-    showingConfirmButtons: showingConfirmButtons,
+  const mapContainerRef = useRef(null);
+  const mapRef = useRef(null);
+  const [mapReady, setMapReady] = useState(false);
+  const isClickable = !drawingState.type;
+
+  const { isFetchingInternalLocations, isLoadingExternalLocations } = useMapAssetRenderer({
+    map: mapRef.current,
+    isClickable,
+    showingConfirmButtons,
+    drawingState,
   });
 
-  // Cleanup listeners on map instance objects
-  useEffect(() => {
-    if (!gMaps) return;
-    return () => {
-      if (assetGeometriesRef.current) {
-        cleanupGeometryListeners(assetGeometriesRef.current, gMaps);
-      }
-      if (markerClusterRef.current) {
-        cleanupInstanceListeners(markerClusterRef.current, gMaps);
-      }
-      if (drawingState.drawingManager) {
-        drawingState.drawingManager.destroy();
-      }
-    };
-  }, [gMaps]);
-
-  // Draw locations on map
-  const hasDrawnRef = useRef(false);
-  useEffect(() => {
-    if (
-      !gMap ||
-      !gMaps ||
-      isFetchingInternalLocations ||
-      isLoadingExternalLocations ||
-      hasDrawnRef.current
-    ) {
-      return;
-    }
-    hasDrawnRef.current = true;
-    const mapBounds = new gMaps.LatLngBounds();
-    drawAssets(gMap, gMaps, mapBounds);
-
-    if (history.location.state?.isStepBack) {
-      reconstructOverlay();
-    }
-
-    if (history.location.state?.cameraInfo) {
-      const { zoom, location } = history.location.state.cameraInfo;
-      if (zoom && location) {
-        gMap.setZoom(zoom);
-        gMap.setCenter(location);
-      }
-    }
-  }, [gMap, gMaps, isFetchingInternalLocations, isLoadingExternalLocations]);
-
   const { getMaxZoom } = useMaxZoom();
-  const handleGoogleMapApi = async ({ map, maps }) => {
-    await getMaxZoom(maps, map);
-    maps.Polygon.prototype.getPolygonBounds = function () {
-      var bounds = new maps.LatLngBounds();
-      this.getPath().forEach(function (element, index) {
-        bounds.extend(element);
-      });
-      return bounds;
-    };
-    maps.Polygon.prototype.getAveragePoint = function () {
-      const latLngArray = this.getPath().getArray();
-      let latSum = 0;
-      let lngSum = 0;
-      for (const latLng of latLngArray) {
-        latSum += latLng.lat();
-        lngSum += latLng.lng();
+
+  // irl.coop: TerraDraw 'finish' yields a GeoJSON DrawnOverlay; validate area /
+  // length with turf and hand it to the drawing manager.
+  const handleShapeFinished = (drawing) => {
+    if (drawing.type === 'polygon') {
+      const areaSqM = turfArea(turfPolygon([[...drawing.coordinates, drawing.coordinates[0]]]));
+      if (Math.round(areaSqM) === 0) {
+        setZeroAreaWarning(true);
+        setShowAdjustAreaSpotlightModal(false);
+      } else {
+        setZeroAreaWarning(false);
       }
-      return new maps.LatLng(latSum / latLngArray.length, lngSum / latLngArray.length);
-    };
-
-    const handleShapeFinished = (drawing) => {
-      if (drawing.type === 'polygon') {
-        const polygonAreaCheck = (path) => {
-          if (Math.round(maps.geometry.spherical.computeArea(path)) === 0) {
-            setZeroAreaWarning(true);
-            setShowAdjustAreaSpotlightModal(false);
-          } else {
-            setZeroAreaWarning(false);
-          }
-        };
-        const path = drawing.overlay.getPath();
-        polygonAreaCheck(path);
-        maps.event.addListener(path, 'set_at', function () {
-          polygonAreaCheck(this);
-        });
-        maps.event.addListener(path, 'insert_at', function () {
-          polygonAreaCheck(this);
-        });
-      } else if (drawing.type === 'polyline') {
-        const polylineLengthCheck = (path) => {
-          if (Math.round(maps.geometry.spherical.computeLength(path)) === 0) {
-            setShowZeroLengthWarning(true);
-            setShowAdjustLineSpotlightModal(false);
-          } else {
-            setShowZeroLengthWarning(false);
-          }
-        };
-        const path = drawing.overlay.getPath();
-        polylineLengthCheck(path);
-        maps.event.addListener(path, 'set_at', function () {
-          polylineLengthCheck(this);
-        });
-        maps.event.addListener(path, 'insert_at', function () {
-          polylineLengthCheck(this);
-        });
+    } else if (drawing.type === 'polyline') {
+      const lineLength = turfLength(turfLineString(drawing.coordinates));
+      if (Math.round(lineLength) === 0) {
+        setShowZeroLengthWarning(true);
+        setShowAdjustLineSpotlightModal(false);
+      } else {
+        setShowZeroLengthWarning(false);
       }
-      setShowingConfirmButtons(true);
-      finishDrawing(drawing, maps, map);
-      capture.setMode(null);
-      dispatch(setMapAddDrawerHide(farm_id));
-    };
-
-    const capture = createShapeCapture(map, maps, handleShapeFinished);
-
-    initDrawingState(map, maps, capture);
-
-    // Adding custom map components
-    const zoomControlDiv = document.createElement('div');
-    const rootZoomControlDiv = createRoot(zoomControlDiv);
-    rootZoomControlDiv.render(
-      <CustomZoom
-        style={{ margin: '12px' }}
-        onClickZoomIn={() => map.setZoom(map.getZoom() + 1)}
-        onClickZoomOut={() => map.setZoom(map.getZoom() - 1)}
-      />,
-    );
-    map.controls[maps.ControlPosition.RIGHT_BOTTOM].push(zoomControlDiv);
-
-    const compassControlDiv = document.createElement('div');
-    const rootCompassControlDiv = createRoot(compassControlDiv);
-    rootCompassControlDiv.render(<CustomCompass style={{ marginRight: '12px' }} />);
-    map.controls[maps.ControlPosition.RIGHT_BOTTOM].push(compassControlDiv);
-
-    setGMap(map);
-    setGMaps(maps);
+    }
+    setShowingConfirmButtons(true);
+    finishDrawing(drawing);
+    drawingState.drawingManager?.setMode(null);
+    dispatch(setMapAddDrawerHide(farm_id));
   };
+
+  // Init the MapLibre map + TerraDraw drawing once.
+  useEffect(() => {
+    const protocol = new pmtiles.Protocol();
+    maplibregl.addProtocol('pmtiles', protocol.tile);
+    const map = new maplibregl.Map({
+      container: mapContainerRef.current,
+      style: STYLE,
+      center: grid_points?.lng != null ? [grid_points.lng, grid_points.lat] : [DEFAULT_CENTER.lng, DEFAULT_CENTER.lat],
+      zoom: DEFAULT_ZOOM,
+      maxZoom: 20,
+      attributionControl: { compact: true },
+    });
+    mapRef.current = map;
+    map.on('load', () => {
+      const capture = createShapeCapture(map, handleShapeFinished);
+      initDrawingState(capture);
+      getMaxZoom(null, null);
+      setMapReady(true);
+    });
+    return () => {
+      map.remove();
+      mapRef.current = null;
+      setMapReady(false);
+    };
+  }, []);
+
+  // Render the drawn shape + width polygon as GeoJSON once the map is ready.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    if (!map.getSource(DRAWING_SOURCE)) {
+      map.addSource(DRAWING_SOURCE, { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      map.addLayer({ id: 'drawing-fill', type: 'fill', source: DRAWING_SOURCE, filter: ['==', ['get', 'kind'], 'draw'], paint: { 'fill-color': '#2f7d32', 'fill-opacity': 0.3 } });
+      map.addLayer({ id: 'drawing-outline', type: 'line', source: DRAWING_SOURCE, filter: ['==', ['get', 'kind'], 'draw'], paint: { 'line-color': '#2f7d32', 'line-width': 2 } });
+      map.addLayer({ id: 'drawing-width-fill', type: 'fill', source: DRAWING_SOURCE, filter: ['==', ['get', 'kind'], 'width'], paint: { 'fill-color': '#2f7d32', 'fill-opacity': 0.2 } });
+    }
+    const features = [];
+    if (drawingState.drawingToCheck?.feature) {
+      const f = drawingState.drawingToCheck.feature;
+      f.properties = { ...(f.properties || {}), kind: 'draw' };
+      features.push(f);
+    }
+    if (drawingState.widthPolygon) {
+      features.push(turfPolygon([[...drawingState.widthPolygon, drawingState.widthPolygon[0]]], { kind: 'width' }));
+    }
+    map.getSource(DRAWING_SOURCE).setData({ type: 'FeatureCollection', features });
+  }, [mapReady, drawingState.drawingToCheck, drawingState.widthPolygon]);
 
   const handleClickAdd = () => {
     setShowExportModal(false);
@@ -444,7 +379,7 @@ export default function Map({ isCompactSideMenu }) {
 
   return (
     <>
-      {isLoaded && (
+      {mapReady && (
         <>
           {!drawingState.type && !showSuccessHeader && <PureMapHeader farmName={farm_name} />}
           {showSuccessHeader && (
@@ -457,15 +392,13 @@ export default function Map({ isCompactSideMenu }) {
           <div data-cy="map-selection" className={styles.pageWrapper}>
             <div className={styles.mapContainer}>
               <div data-cy="map-mapContainer" ref={mapWrapperRef} className={styles.mapContainer}>
-                <GoogleMap
-                  data-cy="google-map"
-                  style={{ flexGrow: 1 }}
-                  center={grid_points}
-                  defaultZoom={DEFAULT_ZOOM}
-                  yesIWantToUseGoogleMapApiInternals
-                  onGoogleApiLoaded={handleGoogleMapApi}
-                  options={getMapOptions}
+                <div ref={mapContainerRef} style={{ width: '100%', height: '100%', flexGrow: 1 }} />
+                <CustomZoom
+                  style={{ position: 'absolute', right: 12, bottom: 40 }}
+                  onClickZoomIn={() => mapRef.current?.zoomIn()}
+                  onClickZoomOut={() => mapRef.current?.zoomOut()}
                 />
+                <CustomCompass style={{ position: 'absolute', right: 12, bottom: 12 }} />
               </div>
               {drawingState.type && (
                 <div
@@ -580,7 +513,7 @@ export default function Map({ isCompactSideMenu }) {
         </>
       )}
       <LoadingBackdrop
-        isOpen={!isLoaded || (!isFetchingInternalLocations && isLoadingExternalLocations)}
+        isOpen={!mapReady || (!isFetchingInternalLocations && isLoadingExternalLocations)}
         showDelay={400}
         isCompactSideMenu={isCompactSideMenu}
         dataName={t('MENU.MAP').toLocaleLowerCase()}
