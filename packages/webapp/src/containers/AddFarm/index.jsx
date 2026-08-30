@@ -1,7 +1,7 @@
 import { useForm } from 'react-hook-form';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useHistory } from 'react-router-dom';
-import GoogleMap from 'google-map-react';
+import CoopMap from '../../components/CoopMap';
 import { VscLocation } from 'react-icons/vsc';
 import { useDispatch, useSelector } from 'react-redux';
 import {
@@ -9,15 +9,10 @@ import {
   userFarmsByUserSelector,
   userFarmSelector,
 } from '../userFarmSlice';
-import { useGoogleMapsLoader } from '../../hooks/useGoogleMapsLoader';
+import { forwardGeocode, reverseGeocode } from '../../util/geocode';
 import PureAddFarm from '../../components/AddFarm';
 import { patchFarm, postFarm } from './saga';
-import MapPin from '../../assets/images/signUp/map_pin.svg?react';
-import MapErrorPin from '../../assets/images/signUp/map_error_pin.svg?react';
-import LoadingAnimation from '../../assets/images/signUp/animated_loading_farm.svg?react';
 import { useTranslation } from 'react-i18next';
-import { getLanguageFromLocalStorage } from '../../util/getLanguageFromLocalStorage';
-import { useThrottle } from '../hooks/useThrottle';
 import { pick } from '../../util/pick';
 
 const AddFarm = () => {
@@ -48,8 +43,6 @@ const AddFarm = () => {
 
   const gridPoints = watch(GRID_POINTS);
   const disabled = !isValid;
-  const { isLoaded } = useGoogleMapsLoader(['places']);
-  const [scriptLoaded, setScriptLoaded] = useState(false);
   const [isGettingLocation, setIsGettingLocation] = useState(false);
   const farmNameRegister = register(FARMNAME, {
     required: { value: true, message: t('ADD_FARM.FARM_IS_REQUIRED') },
@@ -94,64 +87,22 @@ const AddFarm = () => {
     history.push('/farm_selection');
   };
 
-  const placesAutocompleteRef = useRef();
+  // reverse-geocode an existing grid point that lacks a country (e.g. editing a
+  // farm created before the country was captured)
   useEffect(() => {
-    if (!isLoaded) {
-      return;
-    }
-    const options = {
-      types: ['address'],
-      language: getLanguageFromLocalStorage(),
-    };
-
-    // Initialize Google Autocomplete
-    placesAutocompleteRef.current = new google.maps.places.Autocomplete(
-      document.getElementById('autocomplete'),
-      options,
-    );
-
-    // Avoid paying for data that you don't need by restricting the set of
-    // place fields that are returned to just the address components and formatted
-    // address.
-    placesAutocompleteRef.current.setFields(['geometry', 'formatted_address', 'address_component']);
-
-    // Fire Event when a suggested name is selected
-    placesAutocompleteRef.current.addListener('place_changed', handlePlaceChanged);
-
     if (gridPoints && !getValues(COUNTRY)) {
       setCountryFromLatLng(gridPoints);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-    setScriptLoaded(true);
-  }, [isLoaded]);
-
-  const geocoderRef = useRef();
-  const geocoderTimeout = useThrottle();
-  const setCountryFromLatLng = (latlng, callback) => {
+  // irl.coop: reverse geocode (lat/lng -> country) via Nominatim (OSM).
+  const setCountryFromLatLng = async (latlng, callback) => {
     const { lat, lng } = latlng;
-    if (!geocoderRef.current) {
-      geocoderRef.current = new google.maps.Geocoder();
-    }
-    geocoderTimeout(
-      () =>
-        geocoderRef.current.geocode({ location: { lat, lng } }, (results, status) => {
-          let country;
-          status === 'OK' &&
-            results.find((place) =>
-              place?.address_components?.find((component) => {
-                if (component?.types?.includes?.('country')) {
-                  country = component.short_name;
-                  return true;
-                }
-                return false;
-              }),
-            );
-          setValue(GRID_POINTS, { lat, lng }, { shouldValidate: true });
-          setValue(COUNTRY, country, { shouldValidate: true });
-          callback?.();
-        }),
-      isGettingLocation ? 0 : 500,
-    );
+    setValue(GRID_POINTS, { lat, lng }, { shouldValidate: true });
+    const result = await reverseGeocode(lat, lng);
+    setValue(COUNTRY, result?.country, { shouldValidate: true });
+    callback?.();
   };
 
   const parseLatLng = (latLngString) => {
@@ -184,30 +135,19 @@ const AddFarm = () => {
     }
   };
 
-  const handleAddressBlur = () => {
+  const handleAddressBlur = async () => {
+    const value = getValues(ADDRESS);
+    if (value && !parseLatLng(value)) {
+      const result = await forwardGeocode(value);
+      if (result) {
+        setValue(GRID_POINTS, { lat: result.lat, lng: result.lng }, { shouldValidate: true });
+        setValue(COUNTRY, result.country, { shouldValidate: true });
+        setValue(ADDRESS, result.formatted, { shouldValidate: true });
+      }
+    }
     setTimeout(() => {
       trigger([GRID_POINTS, COUNTRY]);
     }, 100);
-  };
-
-  const handlePlaceChanged = () => {
-    const place = placesAutocompleteRef.current.getPlace();
-    if (place?.geometry?.location) {
-      const countryLookup = place.address_components.find((component) =>
-        component.types.includes('country'),
-      )?.short_name;
-
-      setValue(
-        GRID_POINTS,
-        {
-          lat: place.geometry.location.lat(),
-          lng: place.geometry.location.lng(),
-        },
-        { shouldValidate: true },
-      );
-      setValue(COUNTRY, countryLookup, { shouldValidate: true });
-      setValue(ADDRESS, place.formatted_address, { shouldValidate: true });
-    }
   };
 
   const handleGetGeoError = () => {
@@ -269,11 +209,9 @@ const AddFarm = () => {
           },
         ]}
         map={
-          <Map
-            scriptLoaded={scriptLoaded}
-            gridPoints={gridPoints || {}}
-            isGettingLocation={isGettingLocation}
-            errors={addressErrors}
+          <CoopMap
+            center={gridPoints}
+            onPick={(latlng) => setCountryFromLatLng(latlng)}
           />
         }
       />
@@ -281,59 +219,4 @@ const AddFarm = () => {
   );
 };
 
-function Map({ scriptLoaded, gridPoints, errors, isGettingLocation }) {
-  return (
-    <div
-      style={{
-        width: '100vw',
-        maxWidth: '1024px',
-        minHeight: '152px',
-        flexGrow: 1,
-        position: 'relative',
-        transform: 'translateX(-24px)',
-        marginTop: '28px',
-        backgroundColor: 'var(--grey200)',
-        display: 'flex',
-      }}
-    >
-      {(scriptLoaded && !isGettingLocation && gridPoints && gridPoints.lat && (
-        <GoogleMap
-          style={{ flexGrow: 1 }}
-          center={gridPoints}
-          defaultZoom={17}
-          yesIWantToUseGoogleMapApiInternals
-          options={(maps) => ({
-            mapTypeId: maps.MapTypeId.SATELLITE,
-            disableDoubleClickZoom: true,
-            zoomControl: true,
-            streetViewControl: false,
-            scaleControl: true,
-            fullscreenControl: false,
-          })}
-        >
-          <MapPinWrapper {...gridPoints} />
-        </GoogleMap>
-      )) || (
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'center',
-            alignItems: 'center',
-            minHeight: '152px',
-            flexGrow: 1,
-          }}
-        >
-          {(!!errors && <MapErrorPin />) || (isGettingLocation ? <LoadingAnimation /> : <MapPin />)}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function MapPinWrapper() {
-  return <MapPin style={{ display: 'absolute', transform: 'translate(-50%, -100%)' }} />;
-}
-
 export default AddFarm;
-
-/* global google */

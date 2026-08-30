@@ -13,8 +13,12 @@
  *  GNU General Public License for more details, see <https://www.gnu.org/licenses/>.
  */
 
-import { Client, AddressType } from '@googlemaps/google-maps-services-js';
-const googleClient = new Client({});
+import axios from 'axios';
+
+// irl.coop: geocoding via Nominatim (OSM), replacing the Google Maps Geocoding
+// API. Keeps the same exported names/signatures so callers are unchanged.
+const NOMINATIM = process.env.NOMINATIM_URL ?? 'https://nominatim.openstreetmap.org';
+const HEADERS = { 'User-Agent': 'irlcoop-litefarm/3.13.1' };
 
 export interface ParsedAddress {
   street?: string;
@@ -25,50 +29,48 @@ export interface ParsedAddress {
   countryCode?: string;
 }
 
-/**
- * Fetches address components from Google Geocoding API for a given address string. Works with lat-lng
- */
+// Forward geocode (address -> {lat, lng, address components}).
+export async function nominatimSearch(address: string) {
+  const { data } = await axios.get(`${NOMINATIM}/search`, {
+    params: { q: address, format: 'json', addressdetails: 1, limit: 1 },
+    headers: HEADERS,
+  });
+  return Array.isArray(data) ? data : [];
+}
+
+// Reverse geocode (lat/lng -> address + components).
+export async function nominatimReverse(lat: number, lng: number) {
+  const { data } = await axios.get(`${NOMINATIM}/reverse`, {
+    params: { lat, lon: lng, format: 'json', addressdetails: 1 },
+    headers: HEADERS,
+  });
+  return data;
+}
+
+// Kept for the existing callers (validation.ts checks truthiness).
 export async function getAddressComponents(address: string) {
   try {
-    const response = await googleClient.geocode({
-      params: {
-        address,
-        key: process.env.GOOGLE_API_KEY!,
-      },
-    });
-    return response.data.results[0]?.address_components;
+    const results = await nominatimSearch(address);
+    return results[0]?.address ?? null;
   } catch (error) {
     console.error(error);
+    return null;
   }
 }
 
-/**
- * Parses a Google Geocoding API address into structured components.
- * Extracts street, postal code, city, region, and country from Google's response.
- */
+// Kept for the existing callers (dfcAdapter.ts). Maps Nominatim's `address`
+// object to the same ParsedAddress shape the Google implementation returned.
 export const parseGoogleGeocodedAddress = async (address: string): Promise<ParsedAddress> => {
-  const components = await getAddressComponents(address);
-  if (!components) return {};
-
-  // Helper to extract the long_name for a given address component type
-  const getValue = (type: AddressType) =>
-    components.find((component) => component.types.includes(type))?.long_name;
-
-  // Google's short_name for countries is 2-character ISO
-  const countryCode = components.find((component) =>
-    component.types.includes(AddressType.country),
-  )?.short_name;
-
-  const streetNumber = getValue(AddressType.street_number);
-  const route = getValue(AddressType.route);
-  const street = streetNumber && route ? `${streetNumber} ${route}` : streetNumber || route;
-
+  const addr = (await getAddressComponents(address)) as Record<string, string> | null;
+  if (!addr) return {};
   return {
-    street,
-    postalCode: getValue(AddressType.postal_code),
-    city: getValue(AddressType.locality),
-    region: getValue(AddressType.administrative_area_level_1),
-    country: getValue(AddressType.country),
-    countryCode,
+    street: addr.road
+      ? `${addr.house_number ? addr.house_number + ' ' : ''}${addr.road}`
+      : addr.neighbourhood,
+    postalCode: addr.postcode,
+    city: addr.city ?? addr.town ?? addr.village ?? addr.hamlet,
+    region: addr.state,
+    country: addr.country,
+    countryCode: addr.country_code?.toUpperCase(),
   };
 };
