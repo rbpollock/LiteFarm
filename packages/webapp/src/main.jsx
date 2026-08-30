@@ -41,6 +41,7 @@ import fieldWorkTaskSaga from './containers/Task/FieldWorkTask/saga';
 import { Provider } from 'react-redux';
 import { PersistGate } from 'redux-persist/lib/integration/react';
 import loginSaga from './containers/GoogleLoginButton/saga';
+import gateSsoSaga, { gateSsoLogin } from './containers/GateSSO/saga';
 import inviteSaga from './containers/InvitedUserCreateAccount/saga';
 import alertSaga from './containers/Navigation/Alert/saga';
 import mapSaga from './containers/Map/saga';
@@ -91,6 +92,7 @@ sagaMiddleware.run(chooseFarmSaga);
 sagaMiddleware.run(releaseBadgeSaga);
 sagaMiddleware.run(consentSaga);
 sagaMiddleware.run(loginSaga);
+sagaMiddleware.run(gateSsoSaga);
 sagaMiddleware.run(callbackSaga);
 sagaMiddleware.run(inviteSaga);
 sagaMiddleware.run(alertSaga);
@@ -107,6 +109,12 @@ sagaMiddleware.run(exportSaga);
 sagaMiddleware.run(errorHandlerSaga);
 sagaMiddleware.run(fieldWorkTaskSaga);
 sagaMiddleware.run(irrigationTaskTypesSaga);
+
+// irl.coop gate SSO: if there's no session token, try the fleet-gate auto-login
+// (the gate has already authenticated and forwarded the identity).
+if (!localStorage.getItem('id_token')) {
+  store.dispatch(gateSsoLogin());
+}
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <Provider store={store}>
