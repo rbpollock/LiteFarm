@@ -32,6 +32,32 @@ const STYLE = {
       filter: ['in', 'class', 'motorway', 'trunk', 'primary', 'secondary'],
       paint: { 'line-color': '#ffffff', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.8, 14, 5] },
     },
+    {
+      id: 'buildings',
+      type: 'fill',
+      source: 'basemap',
+      'source-layer': 'building',
+      paint: { 'fill-color': '#d9d0c0', 'fill-opacity': 0.7 },
+    },
+    {
+      id: 'road-labels',
+      type: 'symbol',
+      source: 'basemap',
+      'source-layer': 'transportation_name',
+      filter: ['in', 'class', 'motorway', 'trunk', 'primary', 'secondary'],
+      layout: {
+        'text-field': ['get', 'name'],
+        'text-font': ['Noto Sans Regular'],
+        'text-size': 12,
+        'symbol-placement': 'line',
+        'text-optional': true,
+      },
+      paint: {
+        'text-color': '#5c5547',
+        'text-halo-color': '#ffffff',
+        'text-halo-width': 1.5,
+      },
+    },
   ],
 };
 
