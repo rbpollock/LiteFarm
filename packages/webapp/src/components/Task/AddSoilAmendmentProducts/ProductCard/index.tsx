@@ -121,7 +121,7 @@ const SoilAmendmentProductCard = ({
   } = useFormContext();
 
   const nestedFormMethods = useForm<SoilAmendmentProductFormCommonFields>({
-    mode: 'onBlur',
+    mode: 'onChange',
     defaultValues: soilAmendmentProductDetailsDefaultValues,
   });
 

@@ -71,7 +71,7 @@ function PureDocumentDetailView({
     watch,
     formState: { errors, isValid, isDirty },
   } = useForm({
-    mode: 'onBlur',
+    mode: 'onChange',
     shouldUnregister: false,
     defaultValues: defaultData,
   });

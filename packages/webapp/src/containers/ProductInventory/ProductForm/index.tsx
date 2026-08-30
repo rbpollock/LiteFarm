@@ -106,7 +106,7 @@ export default function ProductForm({
   const [isSaving, setIsSaving] = useState(false);
 
   const { t } = useTranslation();
-  const formMethods = useForm<ProductFormFields>({ mode: 'onBlur' });
+  const formMethods = useForm<ProductFormFields>({ mode: 'onChange' });
   const isAdmin = useSelector(isAdminSelector);
   const isOffline = useIsOffline();
 
