@@ -6,6 +6,8 @@ import { DEFAULT_MAX_ZOOM } from './constants';
 import useLocations from '../../hooks/location/useLocations';
 import useExternalLocations from '../../hooks/location/useExternalLocations';
 
+// irl.coop: Google's MaxZoomService is gone. The basemap (PMTiles) has a fixed
+// max zoom, so we just use the default — no per-farm dynamic max-zoom lookup.
 export function useMaxZoom() {
   const { maxZoom, retrievedPoints } = useSelector(mapCacheSelector);
   const { farm_id, grid_points } = useSelector(userFarmSelector);
@@ -19,59 +21,11 @@ export function useMaxZoom() {
   const { locations: externalPoints } = useExternalLocations({ filterBy: 'point' });
   const points = [...(internalPoints ?? []), ...(externalPoints ?? [])];
 
-  const getMaxZoom = async (maps, map = null) => {
+  const getMaxZoom = async (_maps = null, _map = null) => {
+    // Preserve the cached value if present; otherwise fall back to the default.
     if (!maxZoom) {
-      const mapService = new maps.MaxZoomService();
-      const pointsToQuery = [];
-      const pointsCollections = [{ point: grid_points }, ...points];
-      pointsCollections.forEach(({ point }) => {
-        if (
-          ![...pointsToQuery, ...retrievedPoints].some(
-            (item) => item.point.lat === point.lat && item.point.lng === point.lng,
-          )
-        ) {
-          pointsToQuery.push({ point: point });
-        }
-      });
-      const promises = pointsToQuery.map(function ({ point }) {
-        return new Promise(function (resolve, reject) {
-          mapService.getMaxZoomAtLatLng(point, function (result) {
-            if (result.status === 'OK') {
-              resolve({ point: point, maxZoom: result.zoom });
-            } else {
-              console.log('failed maps service promise', result.status);
-              reject(result.status);
-            }
-          });
-        });
-      });
-      try {
-        const results = await Promise.all(promises);
-        const cachedAndActivePoints = retrievedPoints.filter((element) =>
-          pointsCollections.some(
-            ({ point }) => point.lat === element.point.lat && point.lng === element.point.lng,
-          ),
-        );
-        const maxZooms = [...results, ...cachedAndActivePoints].map(({ maxZoom }) => maxZoom);
-        const minNumber = Math.min(...maxZooms);
-        setMaxZoom(minNumber);
-        dispatch(
-          setRetrievedPoints({
-            farm_id,
-            retrievedPoints: [...cachedAndActivePoints, ...results],
-          }),
-        );
-        if (map) map.setOptions({ maxZoom: minNumber });
-      } catch (error) {
-        console.log('Error getting available zooms: ', error);
-        const previousMaxZooms = retrievedPoints.map(({ maxZoom }) => maxZoom);
-        const fallbackZoom =
-          previousMaxZooms.length > 0 ? Math.min(...previousMaxZooms) : DEFAULT_MAX_ZOOM;
-        setMaxZoom(fallbackZoom);
-        if (map) map.setOptions({ maxZoom: fallbackZoom });
-      }
-    } else if (map) {
-      map.setOptions({ maxZoom: maxZoom });
+      setMaxZoom(DEFAULT_MAX_ZOOM);
+      dispatch(setRetrievedPoints({ farm_id, retrievedPoints: [...retrievedPoints] }));
     }
   };
   const maxZoomRef = usePropRef(maxZoom);

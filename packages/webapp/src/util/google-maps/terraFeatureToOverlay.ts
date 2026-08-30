@@ -13,58 +13,32 @@
  *  GNU General Public License for more details, see <https://www.gnu.org/licenses/>.
  */
 
+// irl.coop: the drawn shape is now a raw GeoJSON feature (TerraDraw works in
+// GeoJSON natively). Styling is applied via MapLibre layers, not per-overlay
+// options, so this conversion no longer needs a Google Maps reference.
 import type { GeoJSONStoreFeatures, GeoJSONStoreGeometries } from 'terra-draw';
-import { getDrawingOptions } from '../../containers/Map/useDrawingManager';
 
-type PolygonOverlay = { type: 'polygon'; overlay: google.maps.Polygon };
-type PolylineOverlay = { type: 'polyline'; overlay: google.maps.Polyline };
-type MarkerOverlay = { type: 'marker'; overlay: google.maps.Marker };
-
-export type DrawnOverlay = PolygonOverlay | PolylineOverlay | MarkerOverlay;
-
-const toLatLng = ([lng, lat]: [number, number] | number[]): google.maps.LatLngLiteral => ({
-  lat,
-  lng,
-});
+export type DrawnOverlay = {
+  type: 'polygon' | 'polyline' | 'point';
+  // GeoJSON coordinates ([lng, lat] pairs — ring for polygon, path for line).
+  coordinates: number[][];
+  feature: GeoJSONStoreFeatures<GeoJSONStoreGeometries>;
+};
 
 export const terraFeatureToOverlay = (
   feature: GeoJSONStoreFeatures<GeoJSONStoreGeometries>,
-  map: google.maps.Map,
-  maps: typeof google.maps,
   locationType: string,
 ): DrawnOverlay | null => {
   const { geometry } = feature;
-  const drawingOptions = getDrawingOptions(locationType);
 
-  if (geometry.type === 'Polygon' && drawingOptions?.polygonOptions) {
-    const ring = geometry.coordinates[0];
-    const paths = ring.slice(0, -1).map(toLatLng);
-    const overlay = new maps.Polygon({
-      paths,
-      map,
-      ...drawingOptions.polygonOptions,
-    });
-    return { type: 'polygon', overlay };
+  if (geometry.type === 'Polygon') {
+    return { type: 'polygon', coordinates: geometry.coordinates[0], feature };
   }
-
-  if (geometry.type === 'LineString' && drawingOptions?.polylineOptions) {
-    const path = geometry.coordinates.map(toLatLng);
-    const overlay = new maps.Polyline({
-      path,
-      map,
-      ...drawingOptions.polylineOptions,
-    });
-    return { type: 'polyline', overlay };
+  if (geometry.type === 'LineString') {
+    return { type: 'polyline', coordinates: geometry.coordinates, feature };
   }
-
-  if (geometry.type === 'Point' && drawingOptions?.markerOptions) {
-    const position = toLatLng(geometry.coordinates);
-    const overlay = new maps.Marker({
-      position,
-      map,
-      ...drawingOptions.markerOptions,
-    });
-    return { type: 'marker', overlay };
+  if (geometry.type === 'Point') {
+    return { type: 'point', coordinates: [geometry.coordinates], feature };
   }
 
   return null;

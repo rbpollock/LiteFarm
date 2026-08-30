@@ -13,6 +13,7 @@
  *  GNU General Public License for more details, see <https://www.gnu.org/licenses/>.
  */
 
+import maplibregl from 'maplibre-gl';
 import {
   TerraDraw,
   TerraDrawLineStringMode,
@@ -20,7 +21,7 @@ import {
   TerraDrawPolygonMode,
   TerraDrawRenderMode,
 } from 'terra-draw';
-import { TerraDrawGoogleMapsAdapter } from 'terra-draw-google-maps-adapter';
+import { TerraDrawMapLibreGLAdapter } from 'terra-draw-maplibre-gl-adapter';
 import { getTerraDrawModeConfig } from './terraDrawStyles';
 import {
   terraFeatureToOverlay,
@@ -33,11 +34,10 @@ export type ShapeCapture = {
 };
 
 export const createShapeCapture = (
-  map: google.maps.Map,
-  maps: typeof google.maps,
+  map: maplibregl.Map,
   onFinish: (result: DrawnOverlay) => void,
 ): ShapeCapture => {
-  const adapter = new TerraDrawGoogleMapsAdapter({ lib: maps, map, coordinatePrecision: 9 });
+  const adapter = new TerraDrawMapLibreGLAdapter({ map, maplibregl, coordinatePrecision: 9 });
 
   const draw = new TerraDraw({
     adapter,
@@ -72,7 +72,7 @@ export const createShapeCapture = (
     if (!feature || !currentLocationType) {
       return;
     }
-    const result = terraFeatureToOverlay(feature, map, maps, currentLocationType);
+    const result = terraFeatureToOverlay(feature, currentLocationType);
     draw.clear();
     if (result) {
       onFinish(result);
